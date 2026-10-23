@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.PmsSkuAttributeValueMapper">
+
+    <!--
+      物理删除某个 SPU / 某个 SKU 的全部规格组合明细。
+
+      为什么这里用物理删除，而不是像其它表那样逻辑删除？
+        唯一索引是 uk_sku_id_attribute_id (sku_id, attribute_id, deleted)。
+        「逻辑删除 + 唯一索引带 deleted」的组合有个死结：同一 (sku_id, attribute_id)
+        被逻辑删除两次时会撞键（deleted 只有 0/1 两个值）。
+        其它表（如 pms_attribute）可以用「删除时改写唯一列」（docs/04 §1.7 方案 C）绕开，
+        但本表的唯一列是 sku_id 和 attribute_id —— 【两个都是关联 ID，不能改写】。
+
+      而本表的数据是【纯派生】的：每个 SKU 的规格组合完全由它的 spec_json 决定，
+      每次保存都会整体重建。删掉不丢任何不可再生的信息。
+
+      结论：对「可完全重建的派生数据」，物理删除才是正确选择；
+            对「有独立业务含义的数据」（如 SKU、属性），才需要逻辑删除保历史。
+    -->
+    <delete id="physicalDeleteBySkuId">
+        DELETE FROM `pms_sku_attribute_value` WHERE `sku_id` = #{skuId}
+    </delete>
+
+    <delete id="physicalDeleteBySpuId">
+        DELETE FROM `pms_sku_attribute_value` WHERE `spu_id` = #{spuId}
+    </delete>
+
+</mapper>

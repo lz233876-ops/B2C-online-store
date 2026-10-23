@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.PmsSpuAttributeMapper">
+
+    <!--
+      物理删除某 SPU 的属性关联。
+      理由同 PmsSkuAttributeValueMapper：唯一索引 (spu_id, attribute_id, deleted)
+      的两个唯一列都是关联 ID，无法用「删除时改写唯一列」绕开；
+      而本表数据是纯派生的（由商品表单提交的规格/参数选择决定），每次保存整体重建。
+    -->
+    <delete id="physicalDeleteBySpuId">
+        DELETE FROM `pms_spu_attribute` WHERE `spu_id` = #{spuId}
+    </delete>
+
+</mapper>

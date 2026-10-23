@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.OmsCartItemMapper">
+
+    <!--
+      物理删除。理由见 OmsCartItem 的类注释：
+      唯一索引 (user_id, sku_id, deleted) 的两个唯一列都是关联 ID，无法靠改名逃逸；
+      而购物车项是可完全重建的临时数据。
+
+      ⚠️ 所有删除都必须带 user_id 条件 —— 这是水平越权防线的一部分：
+      只按 id 删会让攻击者删掉别人的购物车。
+    -->
+    <delete id="physicalDeleteByIds">
+        DELETE FROM `oms_cart_item`
+        WHERE `user_id` = #{userId}
+        AND `id` IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </delete>
+
+    <delete id="physicalDeleteBySkuIds">
+        DELETE FROM `oms_cart_item`
+        WHERE `user_id` = #{userId}
+        AND `sku_id` IN
+        <foreach collection="skuIds" item="skuId" open="(" separator="," close=")">
+            #{skuId}
+        </foreach>
+    </delete>
+
+</mapper>

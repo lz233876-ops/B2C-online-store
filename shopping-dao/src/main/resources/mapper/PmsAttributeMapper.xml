@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.PmsAttributeMapper">
+
+    <!--
+      逻辑删除 + 改写唯一列，见 docs/04 §1.7 方案 C。
+
+      为什么不能直接 `UPDATE pms_attribute SET deleted = 1`：
+        唯一索引是 uk_category_id_name (category_id, name, deleted)。
+        如果同一类目下已存在一条「同名且 deleted=1」的历史行，
+        再删一条同名行就会撞成同一个键值 → Duplicate entry 报错。
+        这个场景在正常使用下就会出现（改属性值时把旧值软删，再删整个属性）。
+
+      解法：删除时把 name 改写成「原名_del_主键」，主键唯一 → 改写后的名字必然唯一，
+        于是 (category_id, name, deleted) 永远不冲突，且原名字被彻底释放、可以重建。
+
+      长度安全：name 是 varchar(64)，主键是 19 位雪花 ID。
+        LEFT(name, 36) + '_del_'(5) + 19 = 60 ≤ 64，不会触发截断报错(1406)。
+    -->
+    <update id="softDelete">
+        UPDATE `pms_attribute`
+        SET `deleted` = 1,
+            `name`    = CONCAT(LEFT(`name`, 36), '_del_', `id`)
+        WHERE `id` = #{id}
+          AND `deleted` = 0
+    </update>
+
+</mapper>

@@ -1,0 +1,30 @@
+# ===================================================================
+#  本地开发配置模板
+#
+#  用法：
+#     cp application-example.yml application-dev.yml
+#     然后把里面的值改成你本机的真实值
+#
+#  ⚠️ application-dev.yml 已在 .gitignore 中，不会被提交。
+#     绝对不要把真实密码提交到仓库 —— 这是面试官会看的细节。
+# ===================================================================
+
+spring:
+  datasource:
+    username: shopping
+    password: 你的数据库密码
+
+  data:
+    redis:
+      # 本机 Redis 未设密码时【不要】写这一行：
+      # 空字符串会被 Redisson 当成有效密码并发送 AUTH ""，启动直接失败
+      host: localhost
+      port: 6379
+
+shopping:
+  jwt:
+    # 至少 32 字节（HS256 硬性要求）。生成方式：
+    #   [System.Guid]::NewGuid().ToString('N') + [System.Guid]::NewGuid().ToString('N')
+    # 或 PowerShell: -join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Max 16) })
+    # 生产环境请改用环境变量 SHOPPING_JWT_SECRET 注入，不要把真实密钥写进文件
+    secret: 你的JWT密钥至少32字节

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.WmsStockMapper">
+
+    <!--
+      ============ 库存的四个原子操作 ============
+      全部是【条件更新】：判断与扣减在同一条 SQL 里完成，靠受影响行数表达成功/失败。
+
+      ⚠️ 绝不允许「先 SELECT 判断再 UPDATE」——
+         两个并发请求会同时读到 available_stock = 1，都认为能卖，这就是超卖。
+
+      ⚠️ available_stock 是 STORED 生成列（= stock - locked_stock）。
+         生成列可以直接出现在 WHERE 里（它是真实存储的），
+         所以不需要在应用层再算一遍——**以数据库的值为准**。
+
+      三个字段的关系（每次操作后都要成立）：
+         available_stock      = stock - locked_stock          （生成列，DB 保证）
+         total_in - total_out = stock                          （本文件里手动维护）
+    -->
+
+    <!--
+      ① 下单锁定：把可售库存「冻结」起来。
+         只动 locked_stock，不动 stock —— 因为货还在仓库，只是不能再卖给别人了。
+         条件 available_stock >= num 是防超卖的关键。
+    -->
+    <update id="lockStock">
+        UPDATE `wms_stock`
+        SET `locked_stock` = `locked_stock` + #{num}
+        WHERE `sku_id` = #{skuId}
+          AND `warehouse_id` = #{warehouseId}
+          AND `deleted` = 0
+          AND `available_stock` &gt;= #{num}
+    </update>
+
+    <!--
+      ② 支付扣减：把冻结转为实扣。
+         stock 与 locked_stock 同时减 num → available_stock 保持不变
+         （(stock-n) - (locked-n) = stock - locked）。
+         这正是「已下单未支付」与「已支付」对可售库存的影响相同的原因：
+         可售库存在【锁定那一刻】就已经让出去了。
+         total_out 累加，维持 total_in - total_out = stock。
+    -->
+    <update id="deductStock">
+        UPDATE `wms_stock`
+        SET `stock`        = `stock` - #{num},
+            `locked_stock` = `locked_stock` - #{num},
+            `total_out`    = `total_out` + #{num}
+        WHERE `sku_id` = #{skuId}
+          AND `warehouse_id` = #{warehouseId}
+          AND `deleted` = 0
+          AND `locked_stock` &gt;= #{num}
+          AND `stock` &gt;= #{num}
+    </update>
+
+    <!--
+      ③ 取消/超时释放：把冻结还回可售。
+         同样只动 locked_stock。条件 locked_stock >= num 防止把没锁过的量释放掉
+         （否则会把别的订单的锁定一起吃进来，导致超卖）。
+    -->
+    <update id="releaseStock">
+        UPDATE `wms_stock`
+        SET `locked_stock` = `locked_stock` - #{num}
+        WHERE `sku_id` = #{skuId}
+          AND `warehouse_id` = #{warehouseId}
+          AND `deleted` = 0
+          AND `locked_stock` &gt;= #{num}
+    </update>
+
+    <!--
+      ④ 退款回补：货退回来了，可售库存增加。
+         这里没有「不足」的前置条件（回补只会变多），但 total_in 要累加，
+         把退回的货记为一次入库，维持 total_in - total_out = stock。
+    -->
+    <update id="refundStock">
+        UPDATE `wms_stock`
+        SET `stock`     = `stock` + #{num},
+            `total_in`  = `total_in` + #{num}
+        WHERE `sku_id` = #{skuId}
+          AND `warehouse_id` = #{warehouseId}
+          AND `deleted` = 0
+    </update>
+
+</mapper>

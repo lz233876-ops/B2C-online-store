@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.OmsOrderMapper">
+
+    <!--
+      ============ 订单状态流转：条件更新 ============
+
+      这是本模块最重要的一个 SQL。它的形状是固定的：
+          UPDATE oms_order SET status = 新状态 WHERE id = ? AND status = 期望旧状态
+
+      ⚠️ 为什么必须在 WHERE 里带上「期望的旧状态」：
+         两个并发请求（用户点「确认收货」两次，或「支付回调」与「超时关单」同时到达）
+         都会先读到 status = 2，都认为可以改。只有把旧状态写进 WHERE，
+         数据库的行锁才能保证【恰好一个】成功，另一个受影响行数为 0。
+
+      受影响行数 = 0 时，调用方必须抛业务异常（ORDER_STATUS_CHANGED），
+      绝不能不检查返回值就往下走 —— 那正是「已取消的订单被发货」的成因。
+    -->
+    <update id="updateStatus">
+        UPDATE `oms_order`
+        SET `status` = #{toStatus},
+            `update_time` = NOW()
+            <if test="payTime != null">, `pay_time` = #{payTime}</if>
+            <if test="deliveryTime != null">, `delivery_time` = #{deliveryTime}</if>
+            <if test="receiveTime != null">, `receive_time` = #{receiveTime}</if>
+            <if test="finishTime != null">, `finish_time` = #{finishTime}</if>
+            <if test="closeTime != null">, `close_time` = #{closeTime}</if>
+            <if test="cancelReason != null">, `cancel_reason` = #{cancelReason}</if>
+            <if test="payType != null">, `pay_type` = #{payType}</if>
+            <if test="paidAmount != null">, `paid_amount` = #{paidAmount}</if>
+            <if test="deliveryCompany != null">, `delivery_company` = #{deliveryCompany}</if>
+            <if test="deliveryNo != null">, `delivery_no` = #{deliveryNo}</if>
+        WHERE `id` = #{orderId}
+          AND `status` = #{fromStatus}
+          AND `deleted` = 0
+    </update>
+
+</mapper>

@@ -1,0 +1,68 @@
+# =====================================================================
+#  RocketMQ 5.x —— 只为本项目提供消息队列能力
+#
+#  为什么只跑 RocketMQ，不把 MySQL / Redis 也放进 compose：
+#    本机的 MySQL(3306) 与 Redis(6379) 是【原生安装】且正在运行，
+#    再起容器版会撞端口。容器化的数据库留给「部署篇」（Phase 4 收尾），
+#    那时会用另一份 compose 把整套服务装起来。
+#
+#  启动：
+#    cd docker; docker compose up -d
+#  查看：
+#    docker compose ps; docker compose logs -f rmqbroker
+#  停止：
+#    docker compose down
+#
+#  ⚠️ brokerIP1 必须写 127.0.0.1（见 broker.conf 的说明），
+#     否则宿主机上的应用连不上 broker —— 这是 Docker 里跑 RocketMQ
+#     最常见的坑：broker 会把【容器内网 IP】注册到 NameServer，
+#     而容器网段在 Windows 宿主机上不可路由。
+# =====================================================================
+services:
+  rmqnamesrv:
+    image: apache/rocketmq:5.3.1
+    container_name: rmqnamesrv
+    restart: unless-stopped
+    ports:
+      - "9876:9876"
+    environment:
+      # 容器内存有限，RocketMQ 默认堆偏大，这里收一收
+      JAVA_OPT_EXT: "-Xms256m -Xmx256m -Xmn128m"
+    command: sh mqnamesrv
+    networks:
+      - rmq
+    # ⚠️ 这里【刻意不加 healthcheck】。
+    #    第一版用了 `netstat -an | grep 9876`，但这个镜像里既没有 netstat 也没有 grep
+    #    （基础镜像是精简的 JRE 镜像），于是 healthcheck 永远失败 →
+    #    容器被判定 unhealthy → 依赖它的 broker 根本不启动。
+    #    症状很有迷惑性：一看 ps 是 unhealthy，以为 NameServer 有问题，
+    #    实际看日志它早就 `The Name Server boot success` 了。
+    #    结论：健康检查命令必须只用镜像里【确实存在】的工具。
+
+  rmqbroker:
+    image: apache/rocketmq:5.3.1
+    container_name: rmqbroker
+    restart: unless-stopped
+    # 用简单的启动顺序依赖（不等 healthy）。broker 若先于 namesrv 就绪会启动失败，
+    # 但 restart: unless-stopped 会让它自己重试，直到注册成功。
+    # 这比引入一个「镜像里跑不通的健康检查」可靠得多。
+    depends_on:
+      - rmqnamesrv
+    ports:
+      - "10911:10911"   # broker 主端口（客户端连这个）
+      - "10909:10909"   # broker VIP 端口（主从切换用）
+    environment:
+      NAMESRV_ADDR: "rmqnamesrv:9876"
+      JAVA_OPT_EXT: "-Xms512m -Xmx512m -Xmn256m"
+    volumes:
+      # ⚠️ 挂载路径里的 rocketmq-5.3.1 必须与镜像内的版本目录一致。
+      #    如果换镜像 tag，先用下面这条命令确认目录名：
+      #      docker run --rm apache/rocketmq:5.3.1 sh -c 'echo $ROCKETMQ_HOME'
+      - ./broker.conf:/home/rocketmq/rocketmq-5.3.1/conf/broker.conf:ro
+    command: sh mqbroker -c /home/rocketmq/rocketmq-5.3.1/conf/broker.conf
+    networks:
+      - rmq
+
+networks:
+  rmq:
+    driver: bridge

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.PmsBrandMapper">
+
+    <!--
+      逻辑删除 + 改写 name，理由同 PmsAttributeMapper.softDelete（docs/04 §1.7 方案 C）。
+      唯一索引 uk_name (name, deleted)。
+
+      长度安全：name 是 varchar(64)，LEFT(name, 36) + '_del_'(5) + 19 = 60 ≤ 64。
+    -->
+    <update id="softDelete">
+        UPDATE `pms_brand`
+        SET `deleted` = 1,
+            `name`    = CONCAT(LEFT(`name`, 36), '_del_', `id`)
+        WHERE `id` = #{id}
+          AND `deleted` = 0
+    </update>
+
+</mapper>

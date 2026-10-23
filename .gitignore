@@ -1,0 +1,59 @@
+# ---- Java / Maven ----
+target/
+!.mvn/wrapper/maven-wrapper.jar
+*.class
+*.jar
+*.war
+*.log
+
+# ---- IDE ----
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 敏感配置：绝不提交 ----
+# 数据库密码、Redis 密码、JWT 密钥、模拟支付网关验签私钥都放这里。
+# ⚠️ 只写文件名、不要写 src/main/resources/... 这种带目录的路径：
+#    带 "/" 的 pattern 会被锚定到仓库根目录，而该文件实际在
+#    shopping-web/src/main/resources/ 下，锚定后匹配不到（踩过）。
+application-dev.yml
+application-local.yml
+*.local.yml
+.env
+*.pem
+*.key
+*.p12
+*.jks
+
+# ---- 运行时产物 ----
+logs/
+*.pid
+.DS_Store
+
+# ---- 前端（Node）----
+# ⚠️ node_modules 一旦被提交，仓库会膨胀到几百 MB 且无法优雅回滚。
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+.pnpm-store/
+coverage/
+
+# ---- 本机构建临时目录 ----
+# ⚠️ 必须有这条：本机把 TEMP/TMP 指到了工作区内（否则 esbuild 在沙箱里删系统
+#    临时文件会报 Access is denied）。代价是 Node 会把编译缓存写进
+#    .tmp/node-compile-cache/ —— 几百个二进制小文件。忘了忽略，它们就会被提交
+#    进仓库（本项目踩过一次：518 个跟踪文件里 205 个是这种垃圾）。
+.tmp/
+

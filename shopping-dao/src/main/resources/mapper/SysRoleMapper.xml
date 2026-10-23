@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.SysRoleMapper">
+
+    <!--
+      查某用户拥有的启用角色编码。
+
+      设计要点：
+      ① 三表关联：sys_role <- sys_user_role。关联表也要判 deleted = 0，
+         否则「已经被移除的角色」还会被算进来（关联表是逻辑删除）。
+      ② 过滤 status = 1：角色被禁用后，用户不该再拥有它的权限。
+         禁用立刻生效、不需要改用户数据 —— 这是把权限判断放在查询期的好处。
+      ③ 用 JOIN ... ON 而不是 WHERE 里的隐式连接：语义更清楚，
+         且不会因为漏写条件产生笛卡尔积。
+    -->
+    <select id="selectRoleCodesByUserId" resultType="java.lang.String">
+        SELECT DISTINCT r.role_code
+        FROM sys_role r
+                 INNER JOIN sys_user_role ur ON ur.role_id = r.id AND ur.deleted = 0
+        WHERE ur.user_id = #{userId}
+          AND r.deleted = 0
+          AND r.status = 1
+    </select>
+
+</mapper>

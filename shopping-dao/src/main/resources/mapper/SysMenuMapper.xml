@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.SysMenuMapper">
+
+    <!--
+      查某用户拥有的全部权限标识（按钮级）。
+
+      链路：用户 -> sys_user_role -> 角色 -> sys_role_menu -> 菜单 -> perms
+      四个 JOIN 里每一张表都要判 deleted = 0，漏一个就会把越权数据算进来。
+
+      为什么要 DISTINCT：一个用户可能有多个角色，不同角色的权限会重叠，
+      不去重的话同一个权限字符串会出现多次，装进 Set 虽然也去重了，
+      但让数据库少传点数据更好。
+    -->
+    <select id="selectPermsByUserId" resultType="java.lang.String">
+        SELECT DISTINCT m.perms
+        FROM sys_menu m
+                 INNER JOIN sys_role_menu rm ON rm.menu_id = m.id AND rm.deleted = 0
+                 INNER JOIN sys_user_role ur ON ur.role_id = rm.role_id AND ur.deleted = 0
+                 INNER JOIN sys_role r ON r.id = ur.role_id AND r.deleted = 0 AND r.status = 1
+        WHERE ur.user_id = #{userId}
+          AND m.deleted = 0
+          AND m.status = 1
+          AND m.perms IS NOT NULL
+          AND m.perms &lt;&gt; ''
+    </select>
+
+    <!--
+      查某用户可见的菜单（只取目录 1 与菜单 2，按钮 3 不参与路由）。
+
+      排序 parent_id, sort, id 是为了让 service 层组装树时，
+      同级节点天然有序，不需要再排一遍。
+    -->
+    <select id="selectMenusByUserId" resultType="com.shopping.model.entity.SysMenu">
+        SELECT DISTINCT m.id,
+                        m.parent_id,
+                        m.menu_name,
+                        m.menu_type,
+                        m.path,
+                        m.component,
+                        m.perms,
+                        m.icon,
+                        m.sort,
+                        m.visible,
+                        m.keep_alive,
+                        m.status
+        FROM sys_menu m
+                 INNER JOIN sys_role_menu rm ON rm.menu_id = m.id AND rm.deleted = 0
+                 INNER JOIN sys_user_role ur ON ur.role_id = rm.role_id AND ur.deleted = 0
+                 INNER JOIN sys_role r ON r.id = ur.role_id AND r.deleted = 0 AND r.status = 1
+        WHERE ur.user_id = #{userId}
+          AND m.deleted = 0
+          AND m.status = 1
+          AND m.menu_type IN (1, 2)
+        ORDER BY m.parent_id, m.sort, m.id
+    </select>
+
+</mapper>

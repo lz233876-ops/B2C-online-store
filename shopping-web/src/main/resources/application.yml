@@ -1,0 +1,175 @@
+# ===================================================================
+#  shopping-mall 主配置
+#  ⚠️ 本文件会被提交到 Git，禁止写入任何密码 / 密钥。
+#     敏感值一律用 ${ENV:default} 占位，本地真实值放 application-dev.yml（已在 .gitignore 中）
+# ===================================================================
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+  # 优雅停机：收到停止信号后先处理完进行中的请求
+  shutdown: graceful
+
+spring:
+  application:
+    name: shopping-mall
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  # ---------- 数据源 ----------
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:shopping_mall}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&allowMultiQueries=true
+    username: ${DB_USERNAME:shopping}
+    password: ${DB_PASSWORD:}
+    hikari:
+      minimum-idle: 10
+      # 经验公式：CPU核数 * 2 + 有效磁盘数。不是越大越好
+      maximum-pool-size: 20
+      connection-timeout: 3000
+      idle-timeout: 600000
+      # 必须小于 MySQL 的 wait_timeout，否则会拿到已被服务端断开的连接
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+      pool-name: ShoppingHikariPool
+
+  # ---------- Redis ----------
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+      # ⚠️ 这里刻意【不写】password。
+      #    写成 `password: ${REDIS_PASSWORD:}` 会解析成空字符串 ""，
+      #    Redisson 会把它当成"已配置密码"而发送 `AUTH ""`，
+      #    Redis 直接报错：ERR Client sent AUTH, but no password is set
+      #    需要密码时用环境变量 SPRING_DATA_REDIS_PASSWORD 注入（Spring Boot 松绑定），
+      #    不要在这一行写带默认值的占位符。
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+          max-wait: 3000ms
+
+  # ---------- JSON ----------
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+      fail-on-empty-beans: false
+    deserialization:
+      fail-on-unknown-properties: false
+
+  # ---------- 文件上传（Phase 1 起使用）----------
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 50MB
+
+# ===================================================================
+#  MyBatis-Plus
+# ===================================================================
+mybatis-plus:
+  # 复杂 SQL 手写 XML 放这里；单表查询用 LambdaQueryWrapper，不写 XML
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.shopping.model.entity
+  configuration:
+    # 数据库下划线字段 -> Java 驼峰属性
+    map-underscore-to-camel-case: true
+    # 关闭二级缓存：本项目用 Redis 做缓存，MyBatis 二级缓存跨命名空间的行为容易踩坑
+    cache-enabled: false
+    # 开发期打印 SQL，生产环境请改成 NoLoggingImpl
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    banner: false
+    db-config:
+      # 雪花 ID：分布式友好，且不暴露业务量（自增 ID 一看单量就知道）
+      id-type: assign_id
+      # 逻辑删除：查询自动追加 deleted = 0
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+      table-underline: true
+
+# ===================================================================
+#  接口文档 Knife4j / springdoc
+#  访问：http://localhost:8080/doc.html
+# ===================================================================
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+    # 开启「请求参数缓存」，刷新页面不丢调试参数
+    enable-request-cache: true
+    enable-footer: false
+    enable-open-api: false
+
+# ===================================================================
+#  Actuator：部署探活与压测时看指标
+# ===================================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: shopping-mall
+    description: B2C 自营商城（含秒杀）
+    java: 17
+    spring-boot: 3.2.x
+
+# ===================================================================
+#  业务自定义配置
+# ===================================================================
+shopping:
+  jwt:
+    # ⚠️ 密钥必须至少 32 字节（HS256 的硬性要求），否则启动时就会失败并明确告知。
+    #    这里刻意【不给默认值】：留空 → TokenServiceImpl 在 @PostConstruct 里
+    #    直接抛异常并提示怎么配。这比「用了一个谁都知道的默认密钥」安全得多。
+    #    本地值放 application-dev.yml（已 gitignore）；生产走环境变量 SHOPPING_JWT_SECRET。
+    secret: ${SHOPPING_JWT_SECRET:}
+    issuer: shopping-mall
+    # accessToken 短效：把「JWT 无法主动失效」的窗口压到 30 分钟内
+    access-token-expire-minutes: 30
+    # refreshToken 长效且存 Redis，可被主动吊销（登出即失效）
+    refresh-token-expire-days: 7
+    header: Authorization
+    token-prefix: "Bearer "
+
+# ===================================================================
+#  日志
+#  %X{traceId} 来自 TraceIdFilter 写入 MDC 的值，用于串联一次请求的全部日志
+# ===================================================================
+logging:
+  level:
+    root: info
+    com.shopping: debug
+    org.springframework.web: info
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-}] %logger{40} - %msg%n"

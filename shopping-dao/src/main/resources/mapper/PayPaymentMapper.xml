@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.shopping.dao.mapper.PayPaymentMapper">
+
+    <!--
+      ============ 支付回调的幂等落点 ============
+
+      支付回调有两个必须解决的问题，而这个 SQL 一次解决：
+
+      ① 幂等：渠道会【重复投递】同一条支付结果（它没收到我们的 success 就会一直重试）。
+         条件 `status = 0`（待支付）保证只有第一次能把状态改成「支付成功」，
+         后续重复投递受影响行数为 0 → 调用方据此判定「已处理过」并直接返回 success，
+         从而让渠道停止重试。
+
+      ⚠️ 为什么不能只靠 pay_notify_log 的唯一索引做幂等：
+         真实渠道重试时常常【换一个 notify_id】（支付宝就是这样），
+         唯一索引根本挡不住。所以业务幂等必须落在【业务状态】上，
+         而不是落在「通知的标识」上。这是回调设计里最容易搞错的一点。
+
+      ② 金额防篡改：金额校验放在 Java 里做（因为要把渠道报的金额和本地金额对比后
+         给出明确错误），但状态流转必须在这一条 SQL 里完成，
+         不能用「先 SELECT 判断再 UPDATE」——渠道的重复投递常常间隔几秒并发到达。
+    -->
+    <update id="markSuccess">
+        UPDATE `pay_payment`
+        SET `status`        = 1,
+            `trade_no`      = #{tradeNo},
+            `buyer_account` = #{buyerAccount},
+            `paid_amount`   = #{paidAmount},
+            `pay_time`      = #{payTime},
+            `notify_data`   = #{notifyData},
+            `update_time`   = NOW()
+        WHERE `payment_no` = #{paymentNo}
+          AND `status` = 0
+          AND `deleted` = 0
+    </update>
+
+    <!-- 关闭支付单（订单取消/超时/渠道返回失败）。同样带状态条件，避免把已支付的单关掉 -->
+    <update id="closePayment">
+        UPDATE `pay_payment`
+        SET `status` = 3, `close_time` = NOW(), `error_msg` = #{errorMsg}, `update_time` = NOW()
+        WHERE `payment_no` = #{paymentNo}
+          AND `status` = 0
+          AND `deleted` = 0
+    </update>
+
+    <!-- 标记支付失败（仍待支付，可重新发起）。条件只允许从「待支付」出发 -->
+    <update id="markFailed">
+        UPDATE `pay_payment`
+        SET `status` = 2, `error_msg` = #{errorMsg}, `update_time` = NOW()
+        WHERE `payment_no` = #{paymentNo}
+          AND `status` = 0
+          AND `deleted` = 0
+    </update>
+
+</mapper>
