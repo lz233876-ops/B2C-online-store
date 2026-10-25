@@ -67,10 +67,35 @@ public final class SecurityConstants {
             "/error"
     };
 
-    /** 允许跨域的前端来源（开发环境） */
-    public static final String[] CORS_ALLOWED_ORIGINS = {
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-            "http://localhost:3000"
+    /**
+     * 允许跨域的前端来源（开发环境）。
+     * <p>
+     * <b>⚠️ 这里踩过一个"只在浏览器里才复现"的坑，务必看完再改：</b>
+     * <p>
+     * 前端的 vite 代理配置了 {@code changeOrigin: true}，它会把请求的 Host 改写成
+     * 后端地址（{@code localhost:8080}）。于是浏览器发来的
+     * {@code Origin: http://localhost:5174} 与后端眼中的 Host 不一致，
+     * Spring 就判定这是<b>跨域请求</b>，即使前端走的是同源相对路径 {@code /api/...}。
+     * <p>
+     * 后果：如果 5174 不在白名单里，浏览器里<b>所有</b> POST/PUT 请求都会拿到
+     * {@code 403 Invalid CORS request}，而用 curl/Postman/PowerShell 直接打接口
+     * <b>完全正常</b>（因为它们不带 {@code Origin} 头）——
+     * 这就是本项目真实发生过的 bug：管理后台（5173，在白名单里）一切正常，
+     * 商城前台（5174，不在白名单里）连登录都登不上，而自动化验收脚本全绿。
+     * <p>
+     * 两个教训：
+     * <ol>
+     *   <li>涉及 CORS 的验收，<b>必须带上真实的 {@code Origin} 头</b>，
+     *       否则等于没测；</li>
+     *   <li>开发环境用<b>端口通配</b>而不是逐个列举，避免前端换个端口就整站不可用。</li>
+     * </ol>
+     * <p>
+     * ⚠️ 生产环境不能这么放开：要把这里换成真实域名（如 {@code https://mall.example.com}），
+     * 并且前端最好与 API 同源（Nginx 反向代理），从根上不需要 CORS。
+     */
+    public static final String[] CORS_ALLOWED_ORIGIN_PATTERNS = {
+            // 开发环境：本机任意端口都放行（5173 管理后台 / 5174 商城前台 / 5175+ 预览等）
+            "http://localhost:*",
+            "http://127.0.0.1:*"
     };
 }

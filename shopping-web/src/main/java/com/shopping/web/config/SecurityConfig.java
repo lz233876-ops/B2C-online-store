@@ -178,12 +178,17 @@ public class SecurityConfig {
      * 跨域配置。
      * <p>
      * ⚠️ {@code setAllowCredentials(true)} 与 {@code allowedOrigins("*")} <b>不能同时使用</b>，
-     * 浏览器会直接拒绝。所以这里必须枚举具体来源。
+     * 浏览器会直接拒绝。
+     * <p>
+     * 这里用 {@code setAllowedOriginPatterns}（支持 {@code http://localhost:*} 这种端口通配）
+     * 而不是枚举端口 —— 原因见 {@link SecurityConstants#CORS_ALLOWED_ORIGIN_PATTERNS} 的注释：
+     * 枚举端口时，前端换一个端口就会整站 403，而且用脚本直接打接口完全测不出来。
      */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Arrays.asList(SecurityConstants.CORS_ALLOWED_ORIGINS));
+        configuration.setAllowedOriginPatterns(
+                Arrays.asList(SecurityConstants.CORS_ALLOWED_ORIGIN_PATTERNS));
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);

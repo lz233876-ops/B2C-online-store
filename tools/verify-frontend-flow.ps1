@@ -62,7 +62,18 @@ function Call-Api {
         [string]$Base, [string]$Path, [string]$Method = 'GET',
         $Body = $null, [string]$Token = ''
     )
-    $headers = @{ 'Content-Type' = 'application/json; charset=utf-8' }
+    # ⚠️⚠️ 必须带 Origin 头！这是本脚本最重要的一行，曾经漏过。
+    #   真实浏览器发 POST/PUT 时会带 Origin；而 vite 代理配了 changeOrigin:true，
+    #   会把 Host 改写成后端地址，于是 Spring 把这条请求判定为「跨域」。
+    #   如果该 Origin 不在 CORS 白名单里，Spring 会直接返回 403 Invalid CORS request。
+    #
+    #   症状极具欺骗性：管理后台（5173，在白名单里）一切正常；商城前台（5174，
+    #   当时不在白名单里）连登录都登不上；而本脚本（不带 Origin）却全绿 ——
+    #   等于完全没测出问题。带上 Origin 之后，这类 bug 才会被现有断言自然抓到。
+    $headers = @{
+        'Content-Type' = 'application/json; charset=utf-8'
+        'Origin'       = $Base
+    }
     if ($Token) { $headers['Authorization'] = "Bearer $Token" }
     $args = @{
         Uri = "$Base$Path"; Method = $Method; Headers = $headers
@@ -90,6 +101,27 @@ foreach ($b in @($Mall, $Admin)) {
     Check ("{0} 可访问且 proxy 通" -f $b) ($r.Code -eq 200) "code=$($r.Code) msg=$($r.Msg)"
 }
 
+# CORS 预检：浏览器在跨域写请求前会先发 OPTIONS，被拒的话后面所有 POST 都活不了
+Write-Host "`n--- CORS 预检（OPTIONS）---" -ForegroundColor DarkCyan
+foreach ($b in @($Mall)) {
+    try {
+        $pre = Invoke-WebRequest -Uri "$b/api/app/auth/login" -Method OPTIONS -UseBasicParsing -TimeoutSec 15 `
+            -Headers @{
+                'Origin'                        = $b
+                'Access-Control-Request-Method' = 'POST'
+                'Access-Control-Request-Headers' = 'content-type'
+            }
+        $allowOrigin = $pre.Headers['Access-Control-Allow-Origin']
+        # 预检成功返回 204 No Content（不是 200）—— 断言写成 200 会误报失败
+        Check ("{0} 的 CORS 预检通过" -f $b) `
+            (($pre.StatusCode -eq 200 -or $pre.StatusCode -eq 204) -and [bool]$allowOrigin) `
+            "status=$($pre.StatusCode) allow-origin=$allowOrigin"
+    } catch {
+        $st = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        Check ("{0} 的 CORS 预检通过" -f $b) $false "HTTP $st（白名单里可能缺少该端口）"
+    }
+}
+
 # =====================================================================
 Write-Host "`n=== 1. 商城前台：登录 ===" -ForegroundColor Cyan
 $login = Call-Api -Base $Mall -Path '/api/app/auth/login' -Method POST `
@@ -106,12 +138,22 @@ Check '手机号已脱敏' ($me.Data.phone -like '*`*`*`*`**') "phone=$($me.Data
 Write-Host "`n=== 2. 商品列表 → 详情（Home.vue / Detail.vue）===" -ForegroundColor Cyan
 $list = Call-Api -Base $Mall -Path '/api/app/product/list?pageNum=1&pageSize=10'
 Check '商品列表返回' ($list.Code -eq 200 -and $list.Data.total -ge 1) "total=$($list.Data.total)"
+if ($list.Data.total -lt 1) {
+    # 早失败、早说清楚。否则后面每一步都会因为"没有商品"而级联失败，
+    # 输出一大片红色，反而看不出真正原因（真实踩过：演示商品被下架后报 28 项失败）。
+    Write-Host "`n  ⛔ C 端商品列表为空，后续流程无法进行。" -ForegroundColor Red
+    Write-Host "     常见原因：演示商品被下架（后台点了「下架」）或 publish_status 不是 2。" -ForegroundColor Yellow
+    Write-Host "     修复：UPDATE pms_spu SET status=1 WHERE id=1;" -ForegroundColor Yellow
+    Write-Host "           UPDATE pms_sku SET status=1 WHERE spu_id=1;" -ForegroundColor Yellow
+    Write-Host ("`n  通过 {0} 项，失败 {1} 项（因前置条件缺失提前终止）" -f $script:pass, ($script:fail + 1)) -ForegroundColor Red
+    exit 1
+}
 $spu = @($list.Data.records)[0]
 Check '列表项含 priceYuan / availableStock' ($null -ne $spu.priceYuan -and $null -ne $spu.availableStock)
 Check '列表不含 costPrice（成本价红线）' (-not ($list.Data.records | ConvertTo-Json -Depth 5).Contains('costPrice'))
 
 $detail = Call-Api -Base $Mall -Path "/api/app/product/$($spu.id)"
-Check '商品详情返回' ($detail.Code -eq 200) "code=$($detail.Code)"
+Check '商品详情返回' ($detail.Code -eq 200) "code=$($detail.Code) msg=$($detail.Msg)"
 Check '详情含 SKU 列表' (@($detail.Data.skus).Count -ge 1) "skus=$(@($detail.Data.skus).Count)"
 Check '详情含规格属性（选择器要渲染）' (@($detail.Data.specAttributes).Count -ge 1)
 Check '详情不含 costPrice' (-not ($detail.Data | ConvertTo-Json -Depth 6).Contains('costPrice'))
