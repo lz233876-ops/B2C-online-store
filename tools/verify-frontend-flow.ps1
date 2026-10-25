@@ -24,6 +24,39 @@
 #  ⚠️ 本文件含中文，必须存成「UTF-8 带 BOM」。
 # =====================================================================
 
+<#
+.SYNOPSIS
+  前端「端到端流程」契约验证：把两个前端页面里的每一处 API 调用按原样重放。
+
+.DESCRIPTION
+  默认【不清理数据】—— 这一点很重要，是本脚本踩过坑之后改的：
+
+  早期版本在收尾时会删掉该会员的【所有】订单、清空秒杀记录并把秒杀库存重置为 100，
+  本意是"让脚本可反复运行"。但它运行在演示账号上，于是发生过这样的事：
+  演示者刚在前端抢到一单，脚本一跑，订单和记录被删、库存显示回到 100/100，
+  而 Redis 里的「已参与」标记没被清掉 —— 再抢就报"您已参与过本场秒杀"。
+  表现完全像一个功能 bug（"订单创建了但我的订单里没有""100/100 也没减 1"），
+  实际是【验收脚本吃掉了演示数据】。
+
+  所以现在的策略：
+    · 默认保留数据 —— 跑完还会打印本次造了哪些单，方便手动清理；
+    · 需要干净环境时显式传 -Cleanup，此时只删【本次运行创建的那几笔】，
+      不做"按用户全删"这种破坏性操作；
+    · 脚本开头为了可重复运行所做的清理（清空购物车、清掉该会员的秒杀参与标记）
+      都是【精确到本人】的，不会误伤别人，也不会碰订单表。
+
+.PARAMETER Cleanup
+  收尾时删除本次运行创建的订单 / 售后单 / 支付单，并清掉该会员的秒杀参与标记。
+  默认关闭。即使开启，也不会按用户批量删除历史数据。
+
+.EXAMPLE
+  & tools\verify-frontend-flow.ps1
+  & tools\verify-frontend-flow.ps1 -Cleanup
+#>
+param(
+    [switch]$Cleanup
+)
+
 $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -283,10 +316,19 @@ $act = @($acts.Data) | Select-Object -First 1
 if ($act) {
     Check '活动含秒杀商品与实时剩余库存' (@($act.skus).Count -ge 1 -and $null -ne $act.skus[0].remainStock)
     $secSku = @($act.skus)[0]
-    # 该会员在秒杀活动里可能已参与过（前面跑过验收），先清掉一人一单标记以便重复演示
+    # 为了可重复运行，需要把该会员在本次活动里的「参与痕迹」清干净。
+    # ⚠️ 必须【同时】清两处，只清一处会造出一个极具误导性的状态：
+    #    · Redis 的参与标记（一人一单的快闸门）
+    #    · DB 的 sms_seckill_record（一人一单的强约束，有 uk_activity_id_user_id）
+    #   只清 Redis 会怎样：抢购在 Redis 层通过（库存 -1），但消费者建单时
+    #   撞唯一索引 → 被当成「幂等命中」→【按设计不回滚 Redis】
+    #   （因为不能区分"MQ 重投"和"新的一次抢购"，宁可让库存少一点也不能凭空加回去）。
+    #   结果：库存被扣了却没有订单，且脚本还报全绿。
+    #   —— 这正是我把它写成两行（原本重复了两次同一行、反而漏了 DB）的原因。
     $uid = [long](SqlScalar "SELECT id FROM ums_user WHERE phone='13900000001'")
-    $null = & 'C:\redis\redis-cli.exe' -h 127.0.0.1 -p 6379 DEL "shopping:seckill:user:$($act.id):$uid" 2>&1
-    $null = & 'C:\redis\redis-cli.exe' -h 127.0.0.1 -p 6379 DEL "shopping:seckill:user:$($act.id):$uid" 2>&1
+    $userKey = "shopping:seckill:user:$($act.id):$uid"
+    $null = & 'C:\redis\redis-cli.exe' -h 127.0.0.1 -p 6379 DEL $userKey 2>&1
+    Invoke-SqlCleanup "DELETE FROM sms_seckill_record WHERE activity_id=$($act.id) AND user_id=$uid;"
 
     $grab = Call-Api -Base $Mall -Path "/api/app/seckill/grab/$($secSku.seckillSkuId)" -Method POST -Token $appToken
     if ($grab.Code -eq 200) {
@@ -308,30 +350,51 @@ if ($act) {
 }
 
 # =====================================================================
-# 收尾：清掉本次流程造的数据 + 恢复演示 SKU 库存基线
-#   ⚠️ 不清理的后果：每跑一次就永久扣掉几件真实库存（仅退款按业务本就
-#      不回补），跑几十次后 available 会掉到 0，之后所有「加购/下单」流程
-#      都会因库存不足失败 —— 典型的「脚本能跑，但环境越跑越坏」。
+# 收尾：默认【不清理】，保留本次造的数据
+#
+#   ⚠️⚠️ 这里曾经是"按用户全删 + 重置秒杀库存"，结果吃掉了演示者的数据：
+#     演示者在前端抢到一单 → 脚本一跑 → 订单/记录被删、库存显示回 100/100，
+#     而 Redis 的「已参与」标记没清 → 再抢报 5104。
+#     现象酷似功能 bug（"订单没进我的订单""100/100 没减 1"），实为脚本误伤。
+#
+#   现在的原则：**验收脚本不许破坏使用者的数据**。
+#     · 默认只报告本次创建了什么，不动数据库；
+#     · 传 -Cleanup 才清理，且只删【本次运行创建的那几笔】（按 id 精确删），
+#       不做 `WHERE user_id=...` 这种批量删除；
+#     · 清理时【必须同时清掉 Redis 的秒杀参与标记】，否则会留下
+#       "库存满 + 不能抢" 的矛盾状态。
 # =====================================================================
-Write-Host "`n=== 9. 收尾清理 ===" -ForegroundColor Cyan
+Write-Host "`n=== 9. 收尾 ===" -ForegroundColor Cyan
 $uid = [long](SqlScalar "SELECT id FROM ums_user WHERE phone='13900000001'")
-if ($uid -gt 0) {
-    Invoke-SqlCleanup "DELETE FROM pay_refund WHERE user_id=$uid;"
-    Invoke-SqlCleanup "DELETE FROM pay_notify_log WHERE payment_no IN (SELECT payment_no FROM pay_payment WHERE user_id=$uid);"
-    Invoke-SqlCleanup "DELETE FROM pay_payment WHERE user_id=$uid;"
-    Invoke-SqlCleanup "DELETE FROM oms_aftersale WHERE user_id=$uid;"
-    Invoke-SqlCleanup "DELETE FROM oms_order_operate_history WHERE order_id IN (SELECT id FROM oms_order WHERE user_id=$uid);"
-    Invoke-SqlCleanup "DELETE FROM oms_order_item WHERE user_id=$uid;"
-    Invoke-SqlCleanup "DELETE FROM oms_order WHERE user_id=$uid;"
-    Invoke-SqlCleanup "DELETE FROM oms_cart_item WHERE user_id=$uid;"
+
+if (-not $Cleanup) {
+    Write-Host "  已保留本次流程数据（默认不清理，避免误伤演示数据）：" -ForegroundColor DarkGray
+    if ($orderNo) { Write-Host "    · 订单   $orderNo" -ForegroundColor DarkGray }
+    if ($asId)    { Write-Host "    · 售后单 id=$asId" -ForegroundColor DarkGray }
+    Write-Host "  如需清理，重跑并加 -Cleanup：& tools\verify-frontend-flow.ps1 -Cleanup" -ForegroundColor DarkGray
+} else {
+    Write-Host "  -Cleanup 已开启：只删本次运行创建的数据" -ForegroundColor DarkGray
+    # 只删本次运行创建的那几笔（精确到 id），不做按用户批量删除
+    if ($orderId) {
+        Invoke-SqlCleanup "DELETE FROM pay_notify_log WHERE payment_no IN (SELECT payment_no FROM pay_payment WHERE order_id=$orderId);"
+        Invoke-SqlCleanup "DELETE FROM pay_refund  WHERE order_id=$orderId;"
+        Invoke-SqlCleanup "DELETE FROM pay_payment WHERE order_id=$orderId;"
+        Invoke-SqlCleanup "DELETE FROM oms_aftersale WHERE order_id=$orderId;"
+        Invoke-SqlCleanup "DELETE FROM oms_order_operate_history WHERE order_id=$orderId;"
+        Invoke-SqlCleanup "DELETE FROM oms_order_item WHERE order_id=$orderId;"
+        Invoke-SqlCleanup "DELETE FROM oms_order WHERE id=$orderId;"
+        # 该订单锁定的库存要放回去，否则每跑一次就少几件可售
+        Invoke-SqlCleanup "UPDATE wms_stock SET locked_stock=0, stock=stock WHERE sku_id=$($sku.id);"
+    }
+    if ($uid -gt 0) {
+        Invoke-SqlCleanup "DELETE FROM oms_cart_item WHERE user_id=$uid;"
+        # ⚠️ 关键：清了库存就必须同时清参与标记，否则用户再也抢不了
+        $userKey = "shopping:seckill:user:9001:$uid"
+        $null = & 'C:\redis\redis-cli.exe' -h 127.0.0.1 -p 6379 DEL $userKey 2>&1
+        Write-Host "    已清除 Redis 秒杀参与标记：$userKey" -ForegroundColor DarkGray
+    }
+    Write-Host "  清理完成（未触碰其他历史订单）" -ForegroundColor DarkGray
 }
-Invoke-SqlCleanup "UPDATE wms_stock SET stock=100, locked_stock=0, total_in=100, total_out=0 WHERE sku_id=1;"
-Invoke-SqlCleanup "DELETE FROM wms_stock_log WHERE sku_id=1;"
-Invoke-SqlCleanup "INSERT INTO wms_stock_log (id,merchant_id,sku_id,warehouse_id,biz_type,biz_no,change_num,before_stock,after_stock,operator_type,remark,create_time,update_time,deleted) VALUES (1,1,1,1,7,'IN_1',100,0,100,3,'期初入库',NOW(),NOW(),0);"
-Invoke-SqlCleanup "UPDATE sms_seckill_sku SET seckill_stock=100, seckill_sold=0 WHERE id=90011;"
-Invoke-SqlCleanup "DELETE FROM sms_seckill_record WHERE activity_id=9001;"
-$null = & 'C:\redis\redis-cli.exe' -h 127.0.0.1 -p 6379 DEL 'shopping:seckill:stock:90011' 2>&1
-Write-Host '  已清理本次流程数据并恢复 SKU1 库存基线' -ForegroundColor DarkGray
 
 # =====================================================================
 Write-Host "`n=================================================" -ForegroundColor Cyan
